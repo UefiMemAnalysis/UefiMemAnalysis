@@ -40,7 +40,8 @@ UefiMemDump captures complete system memory snapshots during the UEFI boot proce
     * Load the application from a peripheral device during the UEFI boot phase.
 
 **Note:** The dumping process creates multiple sequential files due to FAT file system limitations. Use `ConcatFiles.c` (instructions below) to concatenate them into a single binary memory dump file.
-########### TODO ###############
+
+########### TODO - add instruction and run commands ###############
 
 ### UEFIDumpAnalysis (Python)
 
@@ -139,6 +140,8 @@ For more details, refer to the academic paper: https://arxiv.org/pdf/2501.16962
 
 ## Contact Information
 Hadar Cochavi Gorelik: <hadarcoc@post.bgu.ac.il>
+
 Kalanit Suzan Segal: <kalanits@post.bgu.ac.il>
+
 Oleg Brodt: <bolegb@bgu.ac.il>
 
