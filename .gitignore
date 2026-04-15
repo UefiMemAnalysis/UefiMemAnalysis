@@ -1,0 +1,12 @@
+/.vscode/*
+/.vs
+*.ilk
+*.iobj
+*.ipdb
+*.exe
+*.dll
+*.pyd
+*.so
+*.o
+*.dylib
+*pycache*
