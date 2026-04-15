@@ -1,5 +1,5 @@
 # UefiMemAnalysis
-UefiMemAnalysis — A memory forensics framework for detecting UEFI-level threats during the pre-boot phase. Consists of **UEFIMemDump**, a memory acquisition tool implemented as a DXE driver and UEFI shell application, and **UEFIDumpAnalysis**, an extensible collection of analysis modules for detecting function pointer hooking, inline hooking, malicious image loading, and gadget-based control-flow patterns in UEFI memory dumps. Evaluated against real-world bootkits including ThunderStrike, CosmicStrand, and Glupteba. Vendor-agnostic and compatible with any UEFI-compliant platform.
+A memory forensics framework for detecting UEFI-level threats during the pre-boot phase. Consists of **UEFIMemDump**, a memory acquisition tool implemented as a DXE driver and UEFI shell application, and **UEFIDumpAnalysis**, an extensible collection of analysis modules for detecting function pointer hooking, inline hooking, malicious image loading, and gadget-based control-flow patterns in UEFI memory dumps. Evaluated against real-world bootkits including ThunderStrike, CosmicStrand, and Glupteba. Vendor-agnostic and compatible with any UEFI-compliant platform.
 This project is a proof-of-concept implementation that validates the research findings detailed in the academic paper: [UEFI Memory Forensics](https://arxiv.org/pdf/2501.16962).
 
 ## Project Goals
