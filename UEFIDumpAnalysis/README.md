@@ -26,6 +26,10 @@ The toolkit is primarily operated from the command line and is intended for rese
 `UEFIDumpAnalysis` requires Python 3.10 or later.
 
 Examples below assume your current working directory is `UEFIDumpAnalysis/`.
+Paths such as `path/to/dump.bin` are placeholders for local files; sample dumps
+are not included in the public repository.
+The `artifacts/` paths shown in examples are generated local outputs and are
+intentionally ignored by Git.
 
 Base install:
 
@@ -66,13 +70,14 @@ python -m pip install -e ".[gadget]"
 python -m uefi_dump_analysis gadget_detection -h
 ```
 
-Run the bundled QEMU sample through the carving pipeline:
+The repository does not include memory dumps. After acquiring or adding a local
+dump and memory map, run the carving pipeline with your local paths:
 
 ```bash
 python -m uefi_dump_analysis uefi_image_carving \
-  -f Dumps/QemuDump/QemuDump.bin \
-  -memory_map Dumps/QemuDump/Memory_Map.txt \
-  -o artifacts/carved-images/qemu-quickstart \
+  -f path/to/dump.bin \
+  -memory_map path/to/Memory_Map.txt \
+  -o artifacts/carved-images/run-name \
   -extract_binaries
 ```
 

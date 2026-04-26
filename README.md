@@ -37,16 +37,25 @@ Additional acquisition docs:
 
 ## Quick Setup
 
-If you only want to run the analysis toolkit against the bundled sample data:
+If you only want to install the analysis toolkit and inspect its CLI:
 
 ```bash
 cd UEFIDumpAnalysis
 python -m pip install -e .
 python -m uefi_dump_analysis -h
+```
+
+The repository does not include memory dumps. After acquiring or adding a local
+dump and memory map, run the carving pipeline with your local paths:
+
+The `artifacts/` output path is generated locally and intentionally ignored by
+Git.
+
+```bash
 python -m uefi_dump_analysis uefi_image_carving \
-  -f Dumps/QemuDump/QemuDump.bin \
-  -memory_map Dumps/QemuDump/Memory_Map.txt \
-  -o artifacts/carved-images/qemu-quickstart \
+  -f path/to/dump.bin \
+  -memory_map path/to/Memory_Map.txt \
+  -o artifacts/carved-images/run-name \
   -extract_binaries
 ```
 
