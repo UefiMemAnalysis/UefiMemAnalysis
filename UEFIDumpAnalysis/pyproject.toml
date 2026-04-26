@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "uefi-dump-analysis"
 version = "0.1.0"
-description = "Plugin-based UEFI memory dump carving and analysis toolkit"
+description = "Plugin-based UEFI memory dump analysis toolkit"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -20,9 +20,6 @@ gadget = [
 
 [project.scripts]
 uefi-mem-analysis = "uefi_dump_analysis.cli:main"
-
-[tool.setuptools]
-py-modules = ["uefi_mem_analysis"]
 
 [tool.setuptools.packages.find]
 include = ["uefi_dump_analysis*"]

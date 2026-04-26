@@ -64,10 +64,9 @@ def _build_parser(modules: PluginMap) -> argparse.ArgumentParser:
     """Build the top-level CLI parser and register each plugin subcommand."""
     main_parser = argparse.ArgumentParser(
         description=(
-            "Plugin-based CLI for carving and analyzing UEFI memory dumps.\n"
+            "Plugin-based CLI for analyzing UEFI memory dumps.\n"
             "Run 'uefi-mem-analysis <module> -h', "
-            "'python -m uefi_dump_analysis <module> -h', or "
-            "'python uefi_mem_analysis.py <module> -h' for module-specific help."
+            "or 'python -m uefi_dump_analysis <module> -h' for module-specific help."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )

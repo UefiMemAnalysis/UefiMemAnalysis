@@ -58,8 +58,6 @@ qemu-system-x86_64 ^
  -drive if=none,id=usbstick,file=<path-to-usb_dump.img>,format=raw ^
  -device qemu-xhci,id=xhci ^
  -device usb-storage,bus=xhci.0,drive=usbstick,bootindex=-1 ^
- -netdev user,id=net0,net=10.0.2.0/24,dhcpstart=10.0.2.15 ^
- -device virtio-net-pci,netdev=net0 ^
  -vga std ^
  -debugcon file:<path-to-debug.log> ^
  -global isa-debugcon.iobase=0x402 ^
