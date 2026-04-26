@@ -1,12 +1,42 @@
-/.vscode/*
-/.vs
+/.vscode/
+/.vs/
+
+# Native build outputs
 *.ilk
 *.iobj
 *.ipdb
-*.exe
 *.dll
 *.pyd
 *.so
 *.o
 *.dylib
-*pycache*
+*.exe
+
+# Python caches and virtual environments
+**/__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Logs and transient local files
+*.log
+*.tmp
+/tmp_wheel_check/
+
+# Public repository scope: only publish the UEFI dump app and driver from edk2.
+UefiMemDump/edk2/*
+!UefiMemDump/edk2/UefiMemDumpApp/
+!UefiMemDump/edk2/UefiMemDumpApp/**
+!UefiMemDump/edk2/UefiMemDumpDriver/
+!UefiMemDump/edk2/UefiMemDumpDriver/**
+
+# Local analysis inputs and generated outputs
+/artifacts/
+UEFIDumpAnalysis/artifacts/
+UEFIDumpAnalysis/Dumps/
