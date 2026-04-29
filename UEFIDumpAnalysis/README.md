@@ -13,7 +13,7 @@ research and forensic triage.
 
 ## Installation
 
-`UEFIDumpAnalysis` requires Python 3.10 or later.
+`UEFIDumpAnalysis` requires Python 3.10 through 3.13.
 
 From the `UEFIDumpAnalysis/` directory, install the base package:
 
@@ -34,8 +34,11 @@ python -m pip install -e ".[gadget]"
 
 `gadget_detection` invokes the pip-installed `ropper` package through
 `python -m ropper`, so it does not depend on a hardcoded `ropper.exe` path.
-The project pins `capstone` to the 5.x line so the local analyzers and `ropper`
-stay on the same major disassembly version.
+The optional gadget install uses `ropper`, which currently depends on
+`filebytes`; use Python 3.10 through 3.13 for this dependency set. The project
+pins `capstone` to the 5.x line so the local analyzers and `ropper` stay on the
+same major disassembly version.
+
 
 ## Recommended Workflow
 

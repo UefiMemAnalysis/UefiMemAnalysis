@@ -29,7 +29,7 @@ suspicious runtime behavior.
 
 - [Acquisition guide](UefiMemDump/README.md)
 - [Analysis guide](UEFIDumpAnalysis/README.md)
-- The `UEFIDumpAnalysis` component requires Python 3.10 or later.
+- The `UEFIDumpAnalysis` component requires Python 3.10 through 3.13.
 
 Additional acquisition docs:
 
