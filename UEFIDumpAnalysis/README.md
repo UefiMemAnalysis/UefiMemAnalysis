@@ -89,16 +89,25 @@ python -m uefi_dump_analysis uefi_image_carving \
 
 The module always writes metadata to `images.csv` and `images.json`.
 `-extract_binaries` writes extracted image binaries under `<output>/images`.
+Use `-memory_map` for reliable and complete extraction. Without
+`Memory_Map.txt`, run the module without `-extract_binaries` for metadata-only
+output, or explicitly use one of the fallback extraction modes.
 
 Arguments:
 
 - `-f`: required raw dump path.
 - `-o`: required output directory for metadata and optional extracted binaries.
-- `-memory_map`: recommended `Memory_Map.txt` from the dumper. It is required
-  for reliable runtime-address to dump-offset translation during binary
-  extraction.
+- `-memory_map`: required for normal binary extraction. Optional for
+  metadata-only output or explicit fallback extraction modes.
 - `-extract_binaries`: optional; writes extracted binaries under
   `<output>/images`.
+- `-pe_header_fallback`: optional; allows binary extraction without
+  `-memory_map` by scanning the dump for unique PE headers whose `ImageBase`
+  matches loaded-image metadata. This mode can be slow on large dumps and may
+  skip images when matches are ambiguous.
+- `-assume_identity_map`: optional; allows binary extraction without
+  `-memory_map` by assuming runtime addresses match dump file offsets. Use only
+  for dumps known to be identity-mapped.
 - `-verify`: optional dumper-produced `ImageList*.txt`. It compares carved
   image records against the dumper's image list and does not change carving
   behavior.

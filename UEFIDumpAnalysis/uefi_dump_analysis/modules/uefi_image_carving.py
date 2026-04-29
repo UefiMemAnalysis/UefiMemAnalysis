@@ -28,6 +28,13 @@ END_DEVICE_PATH_TYPE = 0x7F
 # Practical upper bound used to filter random "ldri" false positives.
 MAX_IMAGE_SIZE = 0x40000000  # 1 GiB
 
+PE_DOS_SIGNATURE = b"MZ"
+PE_NT_SIGNATURE = b"PE\x00\x00"
+PE32_MAGIC = 0x10B
+PE32_PLUS_MAGIC = 0x20B
+PE_MIN_HEADER_SIZE = 0x40
+PE_SIZE_TOLERANCE = 0x1000
+
 
 @dataclass(frozen=True)
 class ImageRecord:
@@ -47,6 +54,13 @@ class AddressRegion:
     start: int
     end: int
     file_offset_start: int
+
+
+@dataclass(frozen=True)
+class PeHeaderCandidate:
+    offset: int
+    image_base: int
+    size_of_image: int
 
 
 class AddressTranslator:
@@ -515,6 +529,147 @@ def _write_images_if_requested(output_dir, data, translator, records):
     return extracted, skipped, image_dir, debug_info
 
 
+def _parse_pe_header_at(data, offset):
+    """Parse enough of a PE header to match it against loaded-image metadata."""
+    if offset + PE_MIN_HEADER_SIZE > len(data):
+        return None
+    if data[offset:offset + 2] != PE_DOS_SIGNATURE:
+        return None
+
+    e_lfanew = struct.unpack_from("<I", data, offset + 0x3C)[0]
+    nt_offset = offset + e_lfanew
+    optional_offset = nt_offset + 0x18
+    if optional_offset + 0x60 > len(data):
+        return None
+    if data[nt_offset:nt_offset + 4] != PE_NT_SIGNATURE:
+        return None
+
+    optional_magic = struct.unpack_from("<H", data, optional_offset)[0]
+    if optional_magic == PE32_PLUS_MAGIC:
+        image_base = struct.unpack_from("<Q", data, optional_offset + 24)[0]
+    elif optional_magic == PE32_MAGIC:
+        image_base = struct.unpack_from("<I", data, optional_offset + 28)[0]
+    else:
+        return None
+
+    size_of_image = struct.unpack_from("<I", data, optional_offset + 56)[0]
+    if image_base == 0 or size_of_image == 0 or size_of_image > MAX_IMAGE_SIZE:
+        return None
+
+    return PeHeaderCandidate(
+        offset=offset,
+        image_base=image_base,
+        size_of_image=size_of_image,
+    )
+
+
+def _pe_size_matches_record(pe_size, record_size):
+    """Return whether a PE SizeOfImage is consistent with the loaded-image size."""
+    if pe_size == record_size:
+        return True
+    if pe_size < record_size and (record_size - pe_size) <= PE_SIZE_TOLERANCE:
+        return True
+    return False
+
+
+def _select_unique_pe_candidate(candidates, record):
+    """Select a unique PE-header candidate for one loaded-image record."""
+    size_matches = [
+        candidate
+        for candidate in candidates
+        if _pe_size_matches_record(candidate.size_of_image, record.image_size)
+    ]
+    exact_matches = [
+        candidate
+        for candidate in size_matches
+        if candidate.size_of_image == record.image_size
+    ]
+
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    if len(exact_matches) > 1:
+        return None
+    if len(size_matches) == 1:
+        return size_matches[0]
+    return None
+
+
+def _write_images_by_pe_header_scan(output_dir, data, records):
+    """Extract images by scanning for PE headers that match loaded-image metadata."""
+    image_dir = os.path.join(output_dir, "images")
+    os.makedirs(image_dir, exist_ok=True)
+
+    records_by_base = {record.image_base: record for record in records}
+    candidates_by_base = {record.image_base: [] for record in records}
+    debug_info = {
+        "pe_signature_hits": 0,
+        "pe_candidates_for_records": 0,
+        "skipped_no_pe_match": 0,
+        "skipped_ambiguous_pe_match": 0,
+        "skipped_out_of_bounds": 0,
+        "skip_preview": [],
+    }
+
+    offset = 0
+    while True:
+        offset = data.find(PE_DOS_SIGNATURE, offset)
+        if offset == -1:
+            break
+
+        debug_info["pe_signature_hits"] += 1
+        candidate = _parse_pe_header_at(data, offset)
+        if candidate is not None and candidate.image_base in records_by_base:
+            candidates_by_base[candidate.image_base].append(candidate)
+            debug_info["pe_candidates_for_records"] += 1
+        offset += 1
+
+    extracted = 0
+    skipped = 0
+    for record in records:
+        candidates = candidates_by_base.get(record.image_base, [])
+        selected = _select_unique_pe_candidate(candidates, record)
+        if selected is None:
+            skipped += 1
+            if not candidates:
+                debug_info["skipped_no_pe_match"] += 1
+                reason = "no PE header matched image base"
+            else:
+                debug_info["skipped_ambiguous_pe_match"] += 1
+                reason = "multiple or size-inconsistent PE headers matched image base"
+            if len(debug_info["skip_preview"]) < 5:
+                debug_info["skip_preview"].append(
+                    {
+                        "image_base": record.image_base,
+                        "identity": record.identity,
+                        "reason": reason,
+                    }
+                )
+            continue
+
+        end_off = selected.offset + record.image_size
+        if end_off > len(data):
+            skipped += 1
+            debug_info["skipped_out_of_bounds"] += 1
+            if len(debug_info["skip_preview"]) < 5:
+                debug_info["skip_preview"].append(
+                    {
+                        "image_base": record.image_base,
+                        "identity": record.identity,
+                        "reason": "PE header match extends beyond the dump size",
+                    }
+                )
+            continue
+
+        identity_tag = _sanitize_filename(record.identity)
+        output_name = f"image_{record.image_base:016X}_{identity_tag}.bin"
+        output_path = os.path.join(image_dir, output_name)
+        with open(output_path, "wb") as handle:
+            handle.write(data[selected.offset:end_off])
+        extracted += 1
+
+    return extracted, skipped, image_dir, debug_info
+
+
 def _print_debug_report(debug_info):
     """Print detailed carving diagnostics collected during one run."""
     print("[debug] UEFIImageCarving diagnostics")
@@ -556,11 +711,21 @@ def _print_debug_report(debug_info):
     if extraction_debug is None:
         return
 
-    print(
-        "[debug] Binary extraction summary: "
-        f"skipped_untranslated={extraction_debug['skipped_untranslated']} "
-        f"skipped_out_of_bounds={extraction_debug['skipped_out_of_bounds']}"
-    )
+    if "pe_signature_hits" in extraction_debug:
+        print(
+            "[debug] PE-header extraction summary: "
+            f"pe_signature_hits={extraction_debug['pe_signature_hits']} "
+            f"pe_candidates_for_records={extraction_debug['pe_candidates_for_records']} "
+            f"skipped_no_pe_match={extraction_debug['skipped_no_pe_match']} "
+            f"skipped_ambiguous_pe_match={extraction_debug['skipped_ambiguous_pe_match']} "
+            f"skipped_out_of_bounds={extraction_debug['skipped_out_of_bounds']}"
+        )
+    else:
+        print(
+            "[debug] Binary extraction summary: "
+            f"skipped_untranslated={extraction_debug['skipped_untranslated']} "
+            f"skipped_out_of_bounds={extraction_debug['skipped_out_of_bounds']}"
+        )
     for preview in extraction_debug["skip_preview"]:
         print(
             "[debug]   skip "
@@ -599,6 +764,8 @@ def carve_images(
     memory_map_path: Optional[str] = None,
     verify_path: Optional[str] = None,
     extract_binaries: bool = False,
+    assume_identity_map: bool = False,
+    pe_header_fallback: bool = False,
 ) -> dict[str, Any]:
     """Carve loaded images from a dump and emit their associated metadata."""
     dump_data = _open_memory_dump(dump_path)
@@ -624,7 +791,21 @@ def carve_images(
             "debug_info": debug_info,
         }
 
-        if extract_binaries and regions is not None:
+        if extract_binaries and pe_header_fallback and regions is None:
+            extracted, skipped, image_dir, extraction_debug = _write_images_by_pe_header_scan(
+                output_dir,
+                dump_data,
+                records,
+            )
+            result.update(
+                {
+                    "image_dir": image_dir,
+                    "extracted": extracted,
+                    "skipped": skipped,
+                }
+            )
+            debug_info["extraction"] = extraction_debug
+        elif extract_binaries and (regions is not None or assume_identity_map):
             extracted, skipped, image_dir, extraction_debug = _write_images_if_requested(
                 output_dir,
                 dump_data,
@@ -651,12 +832,26 @@ def carve_images(
 
 def run(args) -> None:
     """Execute image carving from the CLI entrypoint."""
+    if (
+        bool(getattr(args, "extract_binaries", False))
+        and not getattr(args, "memory_map", None)
+        and not bool(getattr(args, "assume_identity_map", False))
+        and not bool(getattr(args, "pe_header_fallback", False))
+    ):
+        raise SystemExit(
+            "error: -memory_map is required when -extract_binaries is used. "
+            "Run without -extract_binaries for metadata-only output, or use "
+            "-pe_header_fallback or -assume_identity_map when Memory_Map.txt is unavailable."
+        )
+
     result = carve_images(
         dump_path=args.f,
         output_dir=args.o,
         memory_map_path=getattr(args, "memory_map", None),
         verify_path=getattr(args, "verify", None),
         extract_binaries=bool(getattr(args, "extract_binaries", False)),
+        assume_identity_map=bool(getattr(args, "assume_identity_map", False)),
+        pe_header_fallback=bool(getattr(args, "pe_header_fallback", False)),
     )
 
     regions = result["regions"]
@@ -677,13 +872,7 @@ def run(args) -> None:
     print(f"Metadata JSON: {json_path}")
 
     if getattr(args, "extract_binaries", False):
-        if regions is None:
-            print(
-                "Binary extraction skipped: -memory_map was not provided, "
-                "so runtime addresses cannot be translated reliably."
-            )
-        else:
-            print(f"Binary extraction: extracted={extracted} skipped={skipped} output={image_dir}")
+        print(f"Binary extraction: extracted={extracted} skipped={skipped} output={image_dir}")
 
     if reference_entries is not None:
         print(f"Loaded {len(reference_entries)} reference entries from {args.verify}")
@@ -705,8 +894,9 @@ plugin_info = {
         {
             "name": "-memory_map",
             "help": (
-                "Optional path to Memory_Map.txt produced by UefiMemDumpDriver "
-                "(enables runtime address -> file offset translation for binary carving)."
+                "Path to Memory_Map.txt produced by the dumper. Required for normal "
+                "binary extraction; optional for metadata-only output or explicit "
+                "fallback extraction modes."
             ),
             "required": False,
         },
@@ -722,7 +912,24 @@ plugin_info = {
             "name": "-extract_binaries",
             "help": (
                 "Write carved image binaries under <output>/images. Requires -memory_map "
-                "for reliable runtime-to-file translation."
+                "for reliable runtime-to-file translation unless -pe_header_fallback "
+                "or -assume_identity_map is used."
+            ),
+            "action": "store_true",
+        },
+        {
+            "name": "-pe_header_fallback",
+            "help": (
+                "Allow binary extraction without -memory_map by scanning the dump for "
+                "unique PE headers whose ImageBase matches loaded-image metadata."
+            ),
+            "action": "store_true",
+        },
+        {
+            "name": "-assume_identity_map",
+            "help": (
+                "Allow binary extraction without -memory_map by assuming runtime addresses "
+                "match dump file offsets. Use only for dumps known to be identity-mapped."
             ),
             "action": "store_true",
         },
