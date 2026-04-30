@@ -1,7 +1,8 @@
 """Detect inline or trampoline hooks in EFI service-table targets."""
 
-from pathlib import Path
+import json
 import struct
+from pathlib import Path
 
 try:
     import capstone as cpt
@@ -133,6 +134,54 @@ def _build_image_debug_dump(images):
             f"[debug] {index:5d} | 0x{start:016X} | 0x{end:016X} | {identity}"
         )
     return "\n".join(lines)
+
+
+def _parse_json_integer(value, field_name, record_index):
+    """Parse an integer field from carving metadata."""
+    if isinstance(value, bool):
+        raise ValueError(f"record {record_index}: {field_name} must be an integer")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value, 0)
+        except ValueError as exc:
+            raise ValueError(
+                f"record {record_index}: {field_name} must be an integer"
+            ) from exc
+    raise ValueError(f"record {record_index}: {field_name} must be an integer")
+
+
+def _load_images_from_json(images_json_path):
+    """Load image ranges from ``uefi_image_carving`` metadata."""
+    path = Path(images_json_path)
+    with path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+
+    if not isinstance(payload, list):
+        raise ValueError(f"{path}: expected a JSON list of image records")
+
+    images = []
+    for index, record in enumerate(payload, start=1):
+        if not isinstance(record, dict):
+            raise ValueError(f"{path}: record {index} must be a JSON object")
+
+        image_base = _parse_json_integer(record.get("image_base"), "image_base", index)
+        if record.get("image_end") is not None:
+            image_end = _parse_json_integer(record.get("image_end"), "image_end", index)
+        elif record.get("image_size") is not None:
+            image_size = _parse_json_integer(record.get("image_size"), "image_size", index)
+            image_end = image_base + image_size
+        else:
+            raise ValueError(f"{path}: record {index} must include image_end or image_size")
+
+        if image_end <= image_base:
+            raise ValueError(f"{path}: record {index} has an invalid image range")
+
+        identity = record.get("identity") or "unknown"
+        images.append((image_base, image_end, str(identity)))
+
+    return images
 
 
 def _parse_pe_executable_ranges_for_image(dump_data, translator, image_start, image_end):
@@ -752,6 +801,7 @@ def run(args) -> None:
     try:
         output_file = args.o
         memory_map_path = getattr(args, "memory_map", None)
+        images_json_path = getattr(args, "images_json", None)
         require_valid_crc = bool(getattr(args, "require_valid_crc", False))
 
         if not memory_map_path:
@@ -761,7 +811,16 @@ def run(args) -> None:
             )
 
         translator = mu.build_address_translator(dump_data, memory_map_path=memory_map_path)
-        images = mu.extract_images(dump_data, memory_map_path=memory_map_path, quiet=True)
+        if images_json_path:
+            try:
+                images = _load_images_from_json(images_json_path)
+            except (OSError, ValueError) as exc:
+                raise SystemExit(
+                    f"error: unable to load -images_json '{images_json_path}': {exc}"
+                ) from exc
+            print(f"[info] Loaded {len(images)} image records from {images_json_path}.")
+        else:
+            images = mu.extract_images(dump_data, memory_map_path=memory_map_path, quiet=True)
         executable_map, _ = _build_executable_section_map(dump_data, translator, images)
 
         if images and bool(getattr(args, "debug", False)):
@@ -833,6 +892,15 @@ plugin_info = {
             "help": (
                 "Optional path to Memory_Map.txt. Improves runtime-address "
                 "translation for non-identity dumps."
+            ),
+            "required": False,
+        },
+        {
+            "name": "-images_json",
+            "help": (
+                "Optional images.json from uefi_image_carving for the same dump. "
+                "Used as a loaded-image metadata cache; PE parsing and "
+                "disassembly still read bytes from the dump."
             ),
             "required": False,
         },

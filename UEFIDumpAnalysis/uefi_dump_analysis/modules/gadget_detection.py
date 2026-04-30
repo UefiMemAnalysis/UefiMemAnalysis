@@ -297,10 +297,44 @@ def resolve_ropper_command() -> List[str]:
     return [sys.executable, "-m", "ropper"]
 
 
+def _summarize_ropper_failure(exc: subprocess.CalledProcessError) -> str:
+    """Return the most useful single-line Ropper failure message."""
+    output = exc.stderr or exc.stdout or ""
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if lines:
+        return lines[-1]
+    return f"exit code {exc.returncode}"
+
+
+def _run_ropper(
+    command: List[str],
+    image_path: Path,
+    ropper_arch: str,
+    env: Dict[str, str],
+    *,
+    raw_mode: bool,
+) -> subprocess.CompletedProcess[str]:
+    """Run Ropper for one image and return the completed process."""
+    ropper_args = command + ["--arch", ropper_arch, "--file", str(image_path), "--nocolor"]
+    if raw_mode:
+        ropper_args.insert(len(command), "--raw")
+
+    return subprocess.run(
+        ropper_args,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+
+
 def run_ropper_for_image(
     image_path: Path,
     output_path: Path,
     ropper_arch: str = "x86_64",
+    raw_mode: bool = False,
+    raw_fallback: bool = True,
 ) -> None:
     """Generate a gadget listing for one image with the pip-installed ropper package."""
     command = resolve_ropper_command()
@@ -312,17 +346,37 @@ def run_ropper_for_image(
     env["USERPROFILE"] = str(cache_home)
     env["XDG_CACHE_HOME"] = str(cache_home)
     try:
-        completed = subprocess.run(
-            command + ["--arch", ropper_arch, "--file", str(image_path), "--nocolor"],
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
+        completed = _run_ropper(
+            command,
+            image_path,
+            ropper_arch,
+            env,
+            raw_mode=raw_mode,
         )
     except subprocess.CalledProcessError as exc:
-        stderr = exc.stderr.strip() if exc.stderr else "unknown error"
-        raise RuntimeError(f"Ropper failed for '{image_path}': {stderr}") from exc
+        primary_error = _summarize_ropper_failure(exc)
+        if raw_mode or not raw_fallback:
+            raise RuntimeError(f"Ropper failed for '{image_path}': {primary_error}") from exc
+
+        try:
+            completed = _run_ropper(
+                command,
+                image_path,
+                ropper_arch,
+                env,
+                raw_mode=True,
+            )
+        except subprocess.CalledProcessError as raw_exc:
+            raw_error = _summarize_ropper_failure(raw_exc)
+            raise RuntimeError(
+                f"Ropper failed for '{image_path}' in PE mode ({primary_error}) "
+                f"and raw mode ({raw_error})"
+            ) from raw_exc
+
+        print(
+            f"Warning: Ropper PE loading failed for '{image_path}' "
+            f"({primary_error}); generated gadgets in raw mode."
+        )
     output_path.write_text(completed.stdout, encoding="utf-8", newline="\n")
 
 
@@ -332,6 +386,7 @@ def ensure_gadget_files(
     *,
     generate_missing: bool,
     ropper_arch: str = "x86_64",
+    ropper_raw: bool = False,
 ) -> List[Path]:
     """Ensure gadget-cache files exist for the supplied provider images."""
     gadgets_dir.mkdir(parents=True, exist_ok=True)
@@ -359,7 +414,12 @@ def ensure_gadget_files(
             missing.append(image_path)
             continue
         try:
-            run_ropper_for_image(image_path, gadget_file, ropper_arch=ropper_arch)
+            run_ropper_for_image(
+                image_path,
+                gadget_file,
+                ropper_arch=ropper_arch,
+                raw_mode=ropper_raw,
+            )
         except (OSError, RuntimeError) as exc:
             print(f"Warning: {exc}")
             missing.append(image_path)
@@ -1077,6 +1137,7 @@ def render_gadget_detection_debug_report(
     stride: int,
     offsets_mode: bool,
     ropper_arch: str,
+    ropper_raw: bool,
     generate_gadgets: bool,
     skip_capstone_validation: bool,
     max_gadget_bytes: int,
@@ -1099,6 +1160,7 @@ def render_gadget_detection_debug_report(
         f"candidate_stride={stride} "
         f"offsets_mode={offsets_mode} "
         f"ropper_arch={ropper_arch} "
+        f"ropper_raw={ropper_raw} "
         f"generate_gadgets={generate_gadgets} "
         f"skip_capstone_validation={skip_capstone_validation} "
         f"max_gadget_bytes={max_gadget_bytes}"
@@ -1232,6 +1294,7 @@ def run(args) -> None:
     stride = int(getattr(args, "candidate_stride", 8) or 8)
     offsets_mode = bool(getattr(args, "offsets_mode", False))
     ropper_arch = getattr(args, "ropper_arch", None) or "x86_64"
+    ropper_raw = bool(getattr(args, "ropper_raw", False))
     generate_gadgets = bool(getattr(args, "generate_gadgets", False) or dump_file)
 
     missing_gadget_images = ensure_gadget_files(
@@ -1239,6 +1302,7 @@ def run(args) -> None:
         gadgets_dir=gadgets_dir,
         generate_missing=generate_gadgets,
         ropper_arch=ropper_arch,
+        ropper_raw=ropper_raw,
     )
     if missing_gadget_images:
         print(
@@ -1349,6 +1413,7 @@ def run(args) -> None:
             stride=stride,
             offsets_mode=offsets_mode,
             ropper_arch=ropper_arch,
+            ropper_raw=ropper_raw,
             generate_gadgets=generate_gadgets,
             skip_capstone_validation=skip_capstone_validation,
             max_gadget_bytes=max_gadget_bytes,
@@ -1456,6 +1521,14 @@ plugin_info = {
             "name": "-ropper_arch",
             "help": "Architecture passed to Ropper when generating gadgets (default x86_64).",
             "required": False,
+        },
+        {
+            "name": "-ropper_raw",
+            "help": (
+                "Load provider images as raw bytes when generating gadgets. "
+                "Useful for memory-layout carved images whose PE metadata cannot be parsed by Ropper."
+            ),
+            "action": "store_true",
         },
         {
             "name": "-output",

@@ -56,8 +56,10 @@ python -m uefi_dump_analysis uefi_image_carving \
 
 This first step is recommended, but not mandatory for every plugin.
 `gadget_detection` and `image_load_path_detection` can consume carving output
-directly. `pointer_hooking_detection` and `inline_hooking_detection` run
-directly on the dump and extract the image ranges they need internally.
+directly. `inline_hooking_detection` can optionally reuse `images.json` as a
+loaded-image metadata cache while still reading PE headers and disassembly bytes
+from the original dump. `pointer_hooking_detection` runs directly on the dump
+and extracts the image ranges it needs internally.
 
 ## Usage
 
@@ -108,7 +110,7 @@ Arguments:
 - `-assume_identity_map`: optional; allows binary extraction without
   `-memory_map` by assuming runtime addresses match dump file offsets. Use only
   for dumps known to be identity-mapped.
-- `-verify`: optional dumper-produced `ImageList*.txt`. It compares carved
+- `-verify`: optional dumper-produced `ImageList.txt`. It compares carved
   image records against the dumper's image list and does not change carving
   behavior.
 - `-debug`: optional; prints detailed carving diagnostics.
@@ -148,6 +150,7 @@ Check EFI service-table entrypoints for inline or trampoline hooks:
 python -m uefi_dump_analysis inline_hooking_detection \
   -f path/to/dump.bin \
   -memory_map path/to/Memory_Map.txt \
+  -images_json artifacts/carved-images/run-name/images.json \
   -require_valid_crc \
   -o artifacts/reports/inline_hooks.txt
 ```
@@ -159,6 +162,9 @@ Arguments:
   are resolved through runtime-address translation. If omitted, the module
   falls back to identity mapping, which may miss hooks or classify targets
   incorrectly when runtime addresses do not match dump file offsets.
+- `-images_json`: optional `images.json` from a previous `uefi_image_carving`
+  run on the same dump. This is used only as a loaded-image metadata cache;
+  PE parsing and disassembly still read bytes from the dump.
 - `-require_valid_crc`: recommended for normal triage; restricts analysis to
   candidate tables whose header CRC32 field is non-zero.
 - `-bootservicestable`, `-runtimeservicestable`, `-dxeservicestable`: optional
@@ -189,7 +195,6 @@ Directly from a dump:
 python -m uefi_dump_analysis gadget_detection \
   -dump_file path/to/dump.bin \
   -memory_map path/to/Memory_Map.txt \
-  -verify path/to/ImageList.txt \
   -carve_output_dir artifacts/carved-images/run-name \
   -gadgets_dir artifacts/gadgets/run-name \
   -output artifacts/reports/gadget_detection_report.txt
@@ -217,11 +222,45 @@ Candidate sources:
 For existing-image mode (`-efi_dir`), provide at least one candidate source for
 the module to analyze.
 
+Reconstruction modes:
+
+- Resolved runtime mode is the default. Candidate values are interpreted as
+  runtime addresses and resolved as `image_base + gadget_offset`. Use
+  `-image_base_map` when provider images have different runtime bases, or
+  `-image_base` when one base applies to all provider images.
+- Offset-only mode interprets candidate values as offsets inside provider
+  images. Use `-offsets_mode` when the candidate data contains gadget offsets
+  rather than runtime addresses.
+
+Resolved runtime example:
+
+```bash
+python -m uefi_dump_analysis gadget_detection \
+  -efi_dir artifacts/carved-images/run-name \
+  -candidate_dir artifacts/carved-images/run-name \
+  -gadgets_dir artifacts/gadgets/run-name \
+  -generate_gadgets \
+  -image_base_map path/to/image_base_map.json \
+  -output artifacts/reports/gadget_detection_report.txt
+```
+
+Offset-only example:
+
+```bash
+python -m uefi_dump_analysis gadget_detection \
+  -efi_dir artifacts/carved-images/run-name \
+  -candidate_dir artifacts/carved-images/run-name \
+  -gadgets_dir artifacts/gadgets/run-name \
+  -generate_gadgets \
+  -offsets_mode \
+  -output artifacts/reports/gadget_detection_report.txt
+```
+
 Common optional arguments:
 
 - `-memory_map`: used only with `-dump_file`; required for reliable binary
   extraction.
-- `-verify`: optional dumper-produced `ImageList*.txt` forwarded to the carving
+- `-verify`: optional dumper-produced `ImageList.txt` forwarded to the carving
   step for comparison only.
 - `-carve_output_dir`: optional output directory for auto-carving when
   `-dump_file` is supplied. Default: `artifacts/carved-images/auto`.
@@ -229,7 +268,8 @@ Common optional arguments:
   for carved runs, a run-specific directory under `artifacts/gadgets/` is used.
 - `-generate_gadgets`: optional for existing images; generates missing gadget
   caches with `python -m ropper`. It is enabled automatically when
-  `-dump_file` is used.
+  `-dump_file` is used. If Ropper cannot parse a carved image as a PE file, the
+  module retries that image as raw bytes.
 - `-output`: optional report file. Default:
   `artifacts/reports/gadget_detection_report.txt`.
 - `-debug`: optional; prints gadget-index and candidate-scan diagnostics.
@@ -250,6 +290,9 @@ Advanced optional arguments:
   trusts the parsed `ropper` output.
 - `-ropper_arch`: architecture string passed to `ropper` when gadget files are
   generated. Default: `x86_64`.
+- `-ropper_raw`: force Ropper raw mode when generating gadget files. This is
+  useful for memory-layout carved images whose PE metadata cannot be parsed by
+  Ropper.
 - `-offsets_mode`: interprets candidate values as gadget offsets rather than
   runtime addresses.
 
@@ -299,7 +342,7 @@ Arguments:
 - `dump.bin`: raw dump generated by the accompanying acquisition tooling.
 - `Memory_Map.txt`: runtime-address translation map. It is strongly recommended
   for modules that convert runtime addresses into dump offsets.
-- `ImageList*.txt`: optional dumper-generated image list containing loaded-image
+- `ImageList.txt`: optional dumper-generated image list containing loaded-image
   address ranges together with GUID/path identity data. Used by
   `uefi_image_carving -verify` and forwarded by `gadget_detection`; it is not
   required for analysis.
