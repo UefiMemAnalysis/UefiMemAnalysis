@@ -129,7 +129,9 @@ Arguments:
 
 - `-f`: required raw dump path.
 - `-memory_map`: recommended for non-identity dumps so pointer targets can be
-  classified against the correct loaded-image ranges.
+  classified against the correct loaded-image ranges. If omitted, the module
+  falls back to identity mapping, which is only correct when runtime addresses
+  match dump file offsets.
 - `-require_valid_crc`: recommended for normal triage; restricts analysis to
   candidate tables whose header CRC32 field is non-zero.
 - `-bootservicestable`, `-runtimeservicestable`, `-dxeservicestable`: optional
@@ -154,7 +156,9 @@ Arguments:
 
 - `-f`: required raw dump path.
 - `-memory_map`: recommended for non-identity dumps because disassembly targets
-  are resolved through runtime-address translation.
+  are resolved through runtime-address translation. If omitted, the module
+  falls back to identity mapping, which may miss hooks or classify targets
+  incorrectly when runtime addresses do not match dump file offsets.
 - `-require_valid_crc`: recommended for normal triage; restricts analysis to
   candidate tables whose header CRC32 field is non-zero.
 - `-bootservicestable`, `-runtimeservicestable`, `-dxeservicestable`: optional
