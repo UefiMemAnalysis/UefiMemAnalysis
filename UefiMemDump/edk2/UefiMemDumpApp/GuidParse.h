@@ -1,0 +1,33 @@
+#ifndef GUID_PARSE_H
+#define GUID_PARSE_H
+
+#include <Uefi.h>
+
+#define GUID_DATA4_SIZE 8
+#define GUID_DATA1_STR_LEN 8
+#define GUID_DATA2_STR_LEN 4
+#define GUID_DATA3_STR_LEN 4
+#define GUID_DATA4_PAIR_STR_LEN 2
+#define GUID_HYPHEN_STEP1 9
+#define GUID_HYPHEN_STEP2 5
+#define HEX_BASE_10 10
+#define EXTENSION_LENGTH 4
+#define EXTENSION_BUFFER_SIZE (EXTENSION_LENGTH + 1)
+#define MINIMUM_PATH_LENGTH 4
+
+
+BOOLEAN ParseGuidFromString(CONST CHAR16 *Str, EFI_GUID *Guid);
+
+EFI_STATUS ConvertStrToGuid(IN CONST CHAR16 *String, OUT GUID *Guid);
+
+UINTN HexCharToDecimal(IN CHAR16 Char);
+
+CHAR16 EFIAPI ToLower(IN CHAR16 Character);
+
+UINTN EFIAPI GuidToPath(
+  IN  EFI_GUID  *Guid,
+  OUT CHAR16    *Buffer,
+  IN  UINTN     BufferSize);
+
+
+#endif // GUID_PARSE_H

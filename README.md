@@ -1,147 +1,92 @@
 # UefiMemAnalysis
-A memory forensics framework for detecting UEFI-level threats during the pre-boot phase. Consists of **UEFIMemDump**, a memory acquisition tool implemented as a DXE driver and UEFI shell application, and **UEFIDumpAnalysis**, an extensible collection of analysis modules for detecting function pointer hooking, inline hooking, malicious image loading, and gadget-based control-flow patterns in UEFI memory dumps. Evaluated against real-world bootkits including ThunderStrike, CosmicStrand, and Glupteba. Vendor-agnostic and compatible with any UEFI-compliant platform.
-This project is a proof-of-concept implementation that validates the research findings detailed in the academic paper: [UEFI Memory Forensics](https://arxiv.org/pdf/2501.16962).
 
-## Project Goals
+`UefiMemAnalysis` is an open-source framework for UEFI memory acquisition and
+offline analysis of UEFI memory dumps. It accompanies the paper
+[UEFI Memory Forensics](https://arxiv.org/pdf/2501.16962), which has been
+accepted to the 11th IEEE European Symposium on Security and Privacy
+(Euro S&P).
 
-This project aims to provide researchers and practitioners with an open-source solution to investigate firmware-level threats, develop additional analysis modules, and advance overall below-OS security through UEFI memory analysis. The framework's architecture is designed to be extendable, allowing for the creation of new plugins to adapt to emerging threats and research needs.
+The repository includes acquisition tooling for collecting UEFI memory dumps and
+an analysis toolkit for investigating UEFI memory artifacts and detecting
+suspicious runtime behavior.
 
-## Project Overview
+## Repository Layout
 
-Modern computing systems rely on the Unified Extensible Firmware Interface (UEFI). However, UEFI is increasingly targeted by threat actors. This project addresses the lack of below-OS memory forensics by providing a framework for UEFI memory analysis.
+- `UefiMemDump/`
+  Acquisition component providing:
+  - an EDK II DXE driver intended for integration into firmware images; it writes the dump to removable media during the firmware-to-OS handoff
+  - a UEFI shell application that performs the same dump-to-removable-media workflow without requiring firmware integration
+  - a utility, `concat_dump_files.py`, that reassembles split dump chunks into a single dump file
+- `UEFIDumpAnalysis/`
+  Analysis component with plugins for:
+  - UEFI image carving
+  - EFI service-table pointer-hook detection
+  - inline and trampoline-hook detection
+  - suspicious path-based image loading
+  - gadget-chain resolution using `ropper`
 
-This framework consists of two primary components:
+## Read First
 
-* **UefiMemDump:** A memory acquisition tool implemented as both a DXE driver and a UEFI shell application.
-* **UEFIDumpAnalysis:** An extendable collection of Python-based analysis modules.
+- [Acquisition guide](UefiMemDump/README.md)
+- [Analysis guide](UEFIDumpAnalysis/README.md)
+- The `UEFIDumpAnalysis` component requires Python 3.10 through 3.13.
 
-## Features
+Additional acquisition docs:
 
-### UefiMemDump (C)
+- [EDK II integration and build flow](UefiMemDump/docs/building-with-edk2.md)
+- [UEFI shell removable-media workflow](UefiMemDump/docs/removable-media-shell.md)
+- [QEMU workflow](UefiMemDump/docs/qemu-testing.md)
+- [Windows guest VHD preparation](UefiMemDump/docs/windows-vhd-manual.md)
 
-UefiMemDump captures complete system memory snapshots during the UEFI boot process before OS initialization. It is implemented in two ways:
+## Quick Setup
 
-* **DXE Driver:**
-    * Captures memory in a virtualized environment.
-    * Tested in a QEMU environment with EDK II firmware and Windows 11.
-    * Writes memory snapshots to the virtual hard disk (VHD).
-* **UEFI Shell Application:**
-    * Captures memory in physical systems.
-    * Tested on System76 Adder WS and Lenovo ThinkPad T14 Gen4 laptops.
-    * Writes memory snapshots to an external USB device.
-
-**Build Instructions:**
-
-* **DXE Driver:**
-    * Add the driver's INF path to the `.dsc` and `.fdf` files of the target BIOS.
-    * Compile and run the BIOS code using the EDK2 framework ([https://github.com/tianocore/edk2](https://github.com/tianocore/edk2)).
-    * In a virtualized environment, ensure a Windows operating system is loaded to allow dump files to be written to its file system.
-* **UEFI Shell Application:**
-    * Load the application from a peripheral device during the UEFI boot phase.
-
-**Note:** The dumping process creates multiple sequential files due to FAT file system limitations. Use `ConcatFiles.c` (instructions below) to concatenate them into a single binary memory dump file.
-
-########### TODO - add instruction and run commands ###############
-
-### UEFIDumpAnalysis (Python)
-
-UEFIDumpAnalysis provides a suite of Python-based analysis modules:
-
-* **Function Pointer Hooking Detection:**
-    * Analyzes EFI Boot, Runtime, and DXE Services Tables.
-    * Identifies unauthorized modifications to service table function pointers.
-    * Outputs metadata including GUID, driver memory region, and file path.
-* **Inline Hooking Detection:**
-    * Disassembles service function code using Capstone.
-    * Detects `jmp` and `call` instructions that redirect execution flow.
-    * Outputs metadata including function name, hook address, target address, and GUID/file path.
-* **UEFI Image Carving:**
-    * Extracts PE/COFF files from memory dumps.
-    * Uses `b'ldri'` structures to identify valid PE files.
-    * Saves extracted files to a specified output directory, named by GUID or file path.
-
-**Python Dependencies:**
-capstone==5.0.3
-
-**Installation:**
-
-1.  Clone the repository: `git clone https://github.com/uefimemdump/UefiMemDump`
-2.  Navigate to the project directory.
-3.  Install the required Python dependencies: `pip install -r requirements.txt`
-
-**Running the Python Modules:**
-
-1.  Navigate to the `UEFIDumpAnalysis` directory.
-2.  Run the main script `UEFIMemAnalysis.py` with the desired module and arguments.
+Clone the repository, install the Python analysis package, and confirm that the
+CLI is available:
 
 ```bash
-python UEFIMemAnalysis.py <module_name> <arguments>
+git clone https://github.com/UefiMemAnalysis/UefiMemAnalysis.git
+cd UefiMemAnalysis
+python -m pip install -e ./UEFIDumpAnalysis
+python -m uefi_dump_analysis -h
 ```
-## Available Modules:
 
-### Analyze Services (Function Pointer Hooking Detection)
+To include the optional gadget-analysis dependencies:
 
-This module analyzes EFI Boot, Runtime, and DXE Services Tables from a memory dump to detect function pointer hooking.
-
-**Usage:**
 ```bash
-python UEFIMemAnalysis.py AnalyzeServices -f <dump_file> [-bootservicestable] [-runtimeservicestable] [-dxeservicestable] [-o <output_file>]
-```
-### Inline Hook Detection
-This module analyzes EFI Boot, Runtime, and DXE Services Tables from a memory dump to detect inline hooking.
-
-**Usage:**
-```bash
-python UEFIMemAnalysis.py "Inline Hook Detection" -f <dump_file> -o <output_file> [-bootservicestable] [-runtimeservicestable] [-dxeservicestable]
+python -m pip install -e "./UEFIDumpAnalysis[gadget]"
+python -m uefi_dump_analysis gadget_detection -h
 ```
 
-### Image Extraction (UEFI Image Carving)
-This module extracts and saves UEFI images from a memory dump to an output directory.
+## Typical Workflow
 
-**Usage:**
-```bash
-python UEFIMemAnalysis.py "Image Extraction" -f <dump_file> -o <output_directory>
+1. Build either `UefiMemDumpApp` or `UefiMemDumpDriver` inside an upstream EDK II tree.
+2. Acquire a dump to removable media on the target platform.
+3. Reassemble `dump*.bin` files with `UefiMemDump/concat_dump_files.py`.
+4. Analyze the resulting dump with `UEFIDumpAnalysis`.
+
+## Status and Support
+
+This project is maintained on a best-effort basis. Please report reproducible
+bugs through [GitHub Issues](https://github.com/UefiMemAnalysis/UefiMemAnalysis/issues)
+and include the affected component, platform, commands, logs or traceback, and
+enough context to reproduce the problem. There is no guaranteed response time or
+support SLA.
+
+## Citation and Contributions
+
+If you use this project or the accompanying framework in academic or research
+work, please cite the paper below. The BibTeX entry currently cites the arXiv
+preprint; an updated venue citation will be provided when available.
+
+```bibtex
+@article{segal2025uefi,
+  title={Uefi memory forensics: a framework for uefi threat analysis},
+  author={Segal, Kalanit Suzan and Gorelik, Hadar Cochavi and Brodt, Oleg and Elbahar, Yuval and Elovici, Yuval and Shabtai, Asaf},
+  journal={arXiv preprint arXiv:2501.16962},
+  year={2025}
+}
 ```
 
-### ConcatFiles.c Instructions (TBD):
-
-Instructions for building and running the ConcatFiles.c application will be added here.
-
-## Directory Structure
-```bash
-UefiMemDump/
-├── UEFI Application and Driver/
-│   ├── Application/
-│   │   ├── *.c
-│   │   ├── *.h
-│   │   ├── *.inf
-│   │   └── *.efi
-│   └── Driver/
-│       ├── *.c
-│       ├── *.h
-│       ├── *.inf
-│       └── *.efi
-├── UEFIDumpAnalysis/
-│   ├── modules/
-│   │   ├── InlineHookingDetection.py
-│   │   ├── PointerHookingDetection.py
-│   │   └── UEFIImageCarving.py
-│   ├── UEFIMemAnalysis.py
-│   └── requirements.txt
-├── ConcatFiles.c
-└── README.md
-```
-
-## License
-This project is licensed under the MIT License.
-
-## Academic Paper
-For more details, refer to the academic paper: https://arxiv.org/pdf/2501.16962
-
-## Contact Information
-Hadar Cochavi Gorelik: <hadarcoc@post.bgu.ac.il>
-
-Kalanit Suzan Segal: <kalanits@post.bgu.ac.il>
-
-Oleg Brodt: <bolegb@bgu.ac.il>
-
+Pull requests that fix bugs, improve documentation, or add focused enhancements
+are welcome. For larger feature proposals, please open an issue before
+implementation.
