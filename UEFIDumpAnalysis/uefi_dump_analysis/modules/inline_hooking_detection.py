@@ -1,5 +1,6 @@
 """Detect inline or trampoline hooks in EFI service-table targets."""
 
+from pathlib import Path
 import struct
 
 try:
@@ -713,7 +714,9 @@ def output_results(hooks, output_file=None):
     print(output_text)
 
     if output_file:
-        with open(output_file, "a", encoding="utf-8") as handle:
+        output_path = Path(output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("a", encoding="utf-8") as handle:
             handle.write(output_text)
 
 

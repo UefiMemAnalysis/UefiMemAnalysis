@@ -1,5 +1,7 @@
 """Detect suspicious EFI service-table pointers in a UEFI memory dump."""
 
+from pathlib import Path
+
 from uefi_dump_analysis.utilities import constants as cs
 from uefi_dump_analysis.utilities import memory_utils as mu
 from uefi_dump_analysis.utilities import parsing_utils as pu
@@ -123,7 +125,9 @@ def _write_output(output_text, output_file) -> None:
     """Print results and optionally append them to ``output_file``."""
     print(output_text)
     if output_file:
-        with open(output_file, "a", encoding="utf-8") as handle:
+        output_path = Path(output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("a", encoding="utf-8") as handle:
             handle.write(output_text)
 
 
