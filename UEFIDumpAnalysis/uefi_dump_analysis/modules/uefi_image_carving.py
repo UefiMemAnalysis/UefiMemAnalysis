@@ -2,38 +2,16 @@
 
 import csv
 import json
-import mmap
 import os
 import re
 import struct
 from dataclasses import dataclass
-from bisect import bisect_right
 from typing import Any, Optional
 
-SIGNATURE = b"ldri"
-IMAGE_REVISION_OFFSET = 40
-SYSTEM_TABLE_OFFSET = 56
-IMAGE_BASE_OFFSET = 104
-IMAGE_SIZE_OFFSET = 112
-FILE_PATH_PTR_OFFSET = 72
-MIN_READ_SIZE = IMAGE_SIZE_OFFSET + 8
-EXPECTED_LOADED_IMAGE_REVISION = 0x1000
-EFI_SYSTEM_TABLE_SIGNATURE = 0x5453595320494249  # 'IBI SYST'
+from uefi_dump_analysis.utilities import constants as cs
+from uefi_dump_analysis.utilities import memory_utils as mu
 
-MEDIA_DEVICE_PATH = 0x04
-MEDIA_FILEPATH_DP = 0x04
-MEDIA_PIWG_FW_FILE_DP = 0x06
-END_DEVICE_PATH_TYPE = 0x7F
-
-# Practical upper bound used to filter random "ldri" false positives.
-MAX_IMAGE_SIZE = 0x40000000  # 1 GiB
-
-PE_DOS_SIGNATURE = b"MZ"
-PE_NT_SIGNATURE = b"PE\x00\x00"
-PE32_MAGIC = 0x10B
-PE32_PLUS_MAGIC = 0x20B
-PE_MIN_HEADER_SIZE = 0x40
-PE_SIZE_TOLERANCE = 0x1000
+MIN_LOADED_IMAGE_READ_SIZE = cs.IMAGE_SIZE_OFFSET + 8
 
 
 @dataclass(frozen=True)
@@ -50,109 +28,32 @@ class ImageRecord:
 
 
 @dataclass(frozen=True)
-class AddressRegion:
-    start: int
-    end: int
-    file_offset_start: int
-
-
-@dataclass(frozen=True)
 class PeHeaderCandidate:
     offset: int
     image_base: int
     size_of_image: int
 
 
-class AddressTranslator:
-    """
-    Translate runtime physical addresses to dump file offsets.
-
-    If no memory map is supplied, identity mapping is used as a best-effort
-    fallback (works only when address == file offset in the dump layout).
-    """
-
-    def __init__(self, dump_size, regions=None):
-        """Store the dump size and optional runtime-address regions."""
-        self.dump_size = dump_size
-        self.regions = regions or []
-        self._region_starts = [r.start for r in self.regions]
-
-    def to_file_offset(self, address):
-        """Translate a runtime address into a dump-file offset when possible."""
-        if address < 0:
-            return None
-
-        if not self.regions:
-            if address < self.dump_size:
-                return address
-            return None
-
-        index = bisect_right(self._region_starts, address) - 1
-        if index < 0:
-            return None
-
-        region = self.regions[index]
-        if address > region.end:
-            return None
-
-        offset = region.file_offset_start + (address - region.start)
-        if 0 <= offset < self.dump_size:
-            return offset
-        return None
-
-
-def _open_memory_dump(file_path):
-    """Memory-map a dump file for read-only access."""
-    with open(file_path, "rb") as handle:
-        return mmap.mmap(handle.fileno(), length=0, access=mmap.ACCESS_READ)
-
-
-def _read_u64_le(data, offset):
-    """Read one little-endian unsigned 64-bit value from ``data``."""
-    return struct.unpack_from("<Q", data, offset)[0]
-
-
-def _read_runtime_u64(data, translator, runtime_address):
-    """Read one runtime 64-bit value after translating through the memory map."""
-    file_offset = translator.to_file_offset(runtime_address)
-    if file_offset is None:
-        return None
-    if file_offset + 8 > len(data):
-        return None
-    return _read_u64_le(data, file_offset)
-
-
-def _iter_signature_offsets(data):
-    """Yield every offset where the loaded-image signature appears."""
-    index = 0
-    while True:
-        index = data.find(SIGNATURE, index)
-        if index == -1:
-            break
-        yield index
-        index += 1
-
-
 def _classify_loaded_image_candidate(data, signature_offset):
     """Validate one signature hit and return either a record or a rejection reason."""
-    if signature_offset + MIN_READ_SIZE > len(data):
+    if signature_offset + MIN_LOADED_IMAGE_READ_SIZE > len(data):
         return None, "too_short"
 
-    revision = struct.unpack_from("<I", data, signature_offset + IMAGE_REVISION_OFFSET)[0]
-    if revision != EXPECTED_LOADED_IMAGE_REVISION:
+    revision = struct.unpack_from("<I", data, signature_offset + cs.IMAGE_REVISION_OFFSET)[0]
+    if revision != cs.EFI_LOADED_IMAGE_PROTOCOL_REVISION:
         return None, "bad_revision"
 
-    system_table_pointer = _read_u64_le(data, signature_offset + SYSTEM_TABLE_OFFSET)
+    system_table_pointer = mu.read_u64_le(data, signature_offset + cs.SYSTEM_TABLE_OFFSET)
     if system_table_pointer == 0:
         return None, "null_system_table_pointer"
 
-    image_base = _read_u64_le(data, signature_offset + IMAGE_BASE_OFFSET)
-    image_size = _read_u64_le(data, signature_offset + IMAGE_SIZE_OFFSET)
-    file_path_ptr = _read_u64_le(data, signature_offset + FILE_PATH_PTR_OFFSET)
+    image_base = mu.read_u64_le(data, signature_offset + cs.IMAGE_BASE_OFFSET)
+    image_size = mu.read_u64_le(data, signature_offset + cs.IMAGE_SIZE_OFFSET)
+    file_path_ptr = mu.read_u64_le(data, signature_offset + cs.GUID_OFFSET)
 
     if image_base == 0 or image_size == 0:
         return None, "zero_base_or_size"
-    if image_size > MAX_IMAGE_SIZE:
+    if image_size > cs.MAX_IMAGE_SIZE:
         return None, "oversized_image"
 
     image_end = image_base + image_size
@@ -178,18 +79,6 @@ def _looks_like_loaded_image(data, signature_offset):
     """Validate a potential ``LOADED_IMAGE_PRIVATE_DATA`` structure candidate."""
     record, _ = _classify_loaded_image_candidate(data, signature_offset)
     return record
-
-
-def _parse_guid(raw16):
-    """Decode a 16-byte GUID buffer into canonical text form."""
-    if len(raw16) < 16:
-        return None
-    d1, d2, d3, b0, b1, b2, b3, b4, b5, b6, b7 = struct.unpack("<IHH8B", raw16[:16])
-    return (
-        f"{d1:08X}-{d2:04X}-{d3:04X}-"
-        f"{b0:02X}{b1:02X}-"
-        f"{b2:02X}{b3:02X}{b4:02X}{b5:02X}{b6:02X}{b7:02X}"
-    )
 
 
 def _decode_utf16_path(raw_bytes):
@@ -224,17 +113,17 @@ def _extract_identity_from_device_path(data, translator, pointer_address, max_by
             return "unknown"
 
         payload = data[current + 4:node_end]
-        if node_type == MEDIA_DEVICE_PATH:
-            if node_subtype == MEDIA_PIWG_FW_FILE_DP and len(payload) >= 16:
-                guid = _parse_guid(payload[:16])
+        if node_type == cs.MEDIA_DEVICE_PATH:
+            if node_subtype == cs.MEDIA_FW_VOL_FILEPATH_DP and len(payload) >= cs.GUID_SIZE:
+                guid = mu.parse_guid(payload[:cs.GUID_SIZE])
                 if guid and guid != "00000000-0000-0000-0000-000000000000":
                     return guid
-            elif node_subtype == MEDIA_FILEPATH_DP:
+            elif node_subtype == cs.MEDIA_FILEPATH_DP:
                 path = _decode_utf16_path(payload)
                 if path:
                     return path
 
-        if node_type == END_DEVICE_PATH_TYPE:
+        if node_type == cs.END_DEVICE_PATH_TYPE:
             break
 
         consumed += node_len
@@ -247,44 +136,6 @@ def _sanitize_filename(value):
     """Convert an identity string into a filesystem-safe tag."""
     safe = value.replace("\\", "_").replace("/", "_").replace(":", "_").strip()
     return safe if safe else "unknown"
-
-
-def _load_memory_map_regions(memory_map_path):
-    """Parse a ``Memory_Map.txt`` file into runtime-address translation regions."""
-    with open(memory_map_path, "rb") as handle:
-        raw = handle.read()
-    try:
-        text = raw.decode("utf-16")
-    except UnicodeError:
-        text = raw.decode("utf-16-le", errors="ignore")
-
-    line_re = re.compile(
-        r"Start=0x([0-9A-Fa-f]+)\s+End=0x([0-9A-Fa-f]+)\s+#Pages=0x([0-9A-Fa-f]+)"
-    )
-    raw_regions = []
-    for line in text.splitlines():
-        match = line_re.search(line)
-        if not match:
-            continue
-        start = int(match.group(1), 16)
-        end = int(match.group(2), 16)
-        pages = int(match.group(3), 16)
-        if end < start:
-            continue
-        expected_end = start + (pages * 0x1000) - 1
-        if expected_end != end:
-            # Keep the on-disk end value if descriptor page math differs.
-            pass
-        raw_regions.append((start, end))
-
-    raw_regions.sort(key=lambda x: x[0])
-    regions = []
-    file_cursor = 0
-    for start, end in raw_regions:
-        regions.append(AddressRegion(start=start, end=end, file_offset_start=file_cursor))
-        file_cursor += (end - start + 1)
-
-    return regions
 
 
 def _load_reference_image_list(image_list_path):
@@ -340,16 +191,16 @@ def _extract_records(data, translator):
         "dedup_unique_count": 0,
     }
     candidates = []
-    for sig_offset in _iter_signature_offsets(data):
+    for sig_offset in mu.iter_loaded_image_signature_offsets(data):
         debug_info["signature_hits"] += 1
         parsed, rejection_reason = _classify_loaded_image_candidate(data, sig_offset)
         if parsed is None:
             debug_info["candidate_rejections"][rejection_reason] += 1
             continue
 
-        system_table_signature_value = _read_runtime_u64(data, translator, parsed.system_table_pointer)
+        system_table_signature_value = mu.read_runtime_u64(data, translator, parsed.system_table_pointer)
         system_table_signature_valid = (
-            system_table_signature_value == EFI_SYSTEM_TABLE_SIGNATURE
+            system_table_signature_value == cs.EFI_SYSTEM_TABLE_SIGNATURE
             if system_table_signature_value is not None
             else False
         )
@@ -531,9 +382,9 @@ def _write_images_if_requested(output_dir, data, translator, records):
 
 def _parse_pe_header_at(data, offset):
     """Parse enough of a PE header to match it against loaded-image metadata."""
-    if offset + PE_MIN_HEADER_SIZE > len(data):
+    if offset + cs.PE_MIN_HEADER_SIZE > len(data):
         return None
-    if data[offset:offset + 2] != PE_DOS_SIGNATURE:
+    if data[offset:offset + 2] != cs.PE_DOS_SIGNATURE:
         return None
 
     e_lfanew = struct.unpack_from("<I", data, offset + 0x3C)[0]
@@ -541,19 +392,19 @@ def _parse_pe_header_at(data, offset):
     optional_offset = nt_offset + 0x18
     if optional_offset + 0x60 > len(data):
         return None
-    if data[nt_offset:nt_offset + 4] != PE_NT_SIGNATURE:
+    if data[nt_offset:nt_offset + 4] != cs.PE_NT_SIGNATURE:
         return None
 
     optional_magic = struct.unpack_from("<H", data, optional_offset)[0]
-    if optional_magic == PE32_PLUS_MAGIC:
+    if optional_magic == cs.PE32_PLUS_MAGIC:
         image_base = struct.unpack_from("<Q", data, optional_offset + 24)[0]
-    elif optional_magic == PE32_MAGIC:
+    elif optional_magic == cs.PE32_MAGIC:
         image_base = struct.unpack_from("<I", data, optional_offset + 28)[0]
     else:
         return None
 
     size_of_image = struct.unpack_from("<I", data, optional_offset + 56)[0]
-    if image_base == 0 or size_of_image == 0 or size_of_image > MAX_IMAGE_SIZE:
+    if image_base == 0 or size_of_image == 0 or size_of_image > cs.MAX_IMAGE_SIZE:
         return None
 
     return PeHeaderCandidate(
@@ -567,7 +418,7 @@ def _pe_size_matches_record(pe_size, record_size):
     """Return whether a PE SizeOfImage is consistent with the loaded-image size."""
     if pe_size == record_size:
         return True
-    if pe_size < record_size and (record_size - pe_size) <= PE_SIZE_TOLERANCE:
+    if pe_size < record_size and (record_size - pe_size) <= cs.PE_SIZE_TOLERANCE:
         return True
     return False
 
@@ -612,7 +463,7 @@ def _write_images_by_pe_header_scan(output_dir, data, records):
 
     offset = 0
     while True:
-        offset = data.find(PE_DOS_SIGNATURE, offset)
+        offset = data.find(cs.PE_DOS_SIGNATURE, offset)
         if offset == -1:
             break
 
@@ -768,13 +619,13 @@ def carve_images(
     pe_header_fallback: bool = False,
 ) -> dict[str, Any]:
     """Carve loaded images from a dump and emit their associated metadata."""
-    dump_data = _open_memory_dump(dump_path)
+    dump_data = mu.open_memory_dump(dump_path)
     try:
         regions = None
         if memory_map_path:
-            regions = _load_memory_map_regions(memory_map_path)
+            regions = mu.load_memory_map_regions(memory_map_path)
 
-        translator = AddressTranslator(dump_size=len(dump_data), regions=regions)
+        translator = mu.AddressTranslator(dump_size=len(dump_data), regions=regions)
         records, debug_info = _extract_records(dump_data, translator)
         debug_info["translation_mode"] = "memory-map" if regions is not None else "identity-fallback"
         csv_path, json_path = _write_metadata(output_dir, records)

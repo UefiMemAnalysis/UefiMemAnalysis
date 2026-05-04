@@ -6,29 +6,6 @@ from uefi_dump_analysis.utilities import constants as cs
 from uefi_dump_analysis.utilities import memory_utils as mu
 from uefi_dump_analysis.utilities import parsing_utils as pu
 
-DXE_CORE_GUID = "D6A2CB7F-6A18-4E2F-B43B-9920A733700A"
-
-def _find_identity_for_address(address, images):
-    """Return the carved image identity that contains ``address``."""
-    for start, end, identity in images:
-        if start <= address < end:
-            return identity
-    return None
-
-
-def _build_image_debug_dump(images):
-    """Render a debug table of loaded image ranges."""
-    lines = []
-    lines.append("[debug] Loaded image ranges:")
-    lines.append(
-        "[debug] index | start               | end                 | identity"
-    )
-    for index, (start, end, identity) in enumerate(sorted(images, key=lambda item: item[0]), start=1):
-        lines.append(
-            f"[debug] {index:5d} | 0x{start:016X} | 0x{end:016X} | {identity}"
-        )
-    return "\n".join(lines)
-
 
 def _is_identity_whitelisted(function_name, identity):
     """Return ``True`` when a pointer target is expected for the given service."""
@@ -36,7 +13,12 @@ def _is_identity_whitelisted(function_name, identity):
         return False
 
     identity_upper = str(identity).upper()
-    if identity_upper == DXE_CORE_GUID:
+
+    dxe_core_guids = cs.WHITE_LIST_GUIDS.get("DXECore", [])
+    if isinstance(dxe_core_guids, str):
+        dxe_core_guids = [dxe_core_guids]
+    dxe_core_upper = {str(guid).upper() for guid in dxe_core_guids}
+    if identity_upper in dxe_core_upper:
         return True
 
     allowed_guids = cs.WHITE_LIST_GUIDS.get(function_name, [])
@@ -57,7 +39,7 @@ def _classify_pointer(function_name, pointer_value, images):
     if pointer_value == 0:
         return True, " <- suspicious (NULL function pointer)"
 
-    identity = _find_identity_for_address(pointer_value, images)
+    identity = mu.find_identity_for_address(pointer_value, images)
     if identity is None:
         return True, " <- suspicious (address outside known loaded images)"
 
@@ -153,7 +135,7 @@ def run(args) -> None:
         if not images:
             print("[warning] No loaded images were extracted. Hook classification will be limited.")
         elif bool(getattr(args, "debug", False)):
-            print(_build_image_debug_dump(images))
+            print(mu.build_image_debug_dump(images))
 
         process_all_tables = not (
             args.bootservicestable or args.runtimeservicestable or args.dxeservicestable
