@@ -22,13 +22,6 @@ BYTES_PER_INSTRUCTION_BUDGET = 16
 ENTRY_TRANSFER_WINDOW = 6
 
 CONTROL_FLOW_MNEMONICS = {"jmp", "call"}
-PE_DOS_SIGNATURE = b"MZ"
-PE_NT_SIGNATURE = b"PE\x00\x00"
-PE32_MAGIC = 0x10B
-PE32_PLUS_MAGIC = 0x20B
-IMAGE_SCN_MEM_EXECUTE = 0x20000000
-SECTION_HEADER_SIZE = 40
-MAX_SECTION_COUNT = 256
 ZERO_EXTENDED_32BIT_REGS = {
     "eax",
     "ebx",
@@ -91,49 +84,6 @@ def _canonical_reg_name(reg_name):
         return reg_name[:-1]
 
     return reg_name
-
-
-def _find_identity_for_address(address, images):
-    """Return the carved image identity that contains ``address``."""
-    if address is None:
-        return None
-
-    for start, end, identity in images:
-        if start <= address < end:
-            return identity
-    return None
-
-
-def _find_image_for_address(address, images):
-    """Return the full carved image tuple that contains ``address``."""
-    if address is None:
-        return None
-
-    for image in images:
-        start, end, _ = image
-        if start <= address < end:
-            return image
-    return None
-
-
-def _image_key(image_tuple):
-    """Build a stable dictionary key for an image tuple."""
-    start, end, identity = image_tuple
-    return (start, end, str(identity))
-
-
-def _build_image_debug_dump(images):
-    """Render a debug table of loaded image ranges."""
-    lines = []
-    lines.append("[debug] Loaded image ranges:")
-    lines.append(
-        "[debug] index | start               | end                 | identity"
-    )
-    for index, (start, end, identity) in enumerate(sorted(images, key=lambda item: item[0]), start=1):
-        lines.append(
-            f"[debug] {index:5d} | 0x{start:016X} | 0x{end:016X} | {identity}"
-        )
-    return "\n".join(lines)
 
 
 def _parse_json_integer(value, field_name, record_index):
@@ -215,7 +165,7 @@ def _parse_pe_executable_ranges_for_image(dump_data, translator, image_start, im
     if not header_bytes or len(header_bytes) < 0x40:
         return _result("header-read-failed")
 
-    if header_bytes[:2] != PE_DOS_SIGNATURE:
+    if header_bytes[:2] != cs.PE_DOS_SIGNATURE:
         return _result("non-pe-signature")
 
     e_lfanew = struct.unpack_from("<I", header_bytes, 0x3C)[0]
@@ -230,12 +180,12 @@ def _parse_pe_executable_ranges_for_image(dump_data, translator, image_start, im
         if not header_bytes or len(header_bytes) < min_nt_read:
             return _result("nt-header-read-failed")
 
-    if header_bytes[e_lfanew:e_lfanew + 4] != PE_NT_SIGNATURE:
+    if header_bytes[e_lfanew:e_lfanew + 4] != cs.PE_NT_SIGNATURE:
         return _result("missing-pe-signature")
 
     number_of_sections = struct.unpack_from("<H", header_bytes, e_lfanew + 6)[0]
     size_of_optional_header = struct.unpack_from("<H", header_bytes, e_lfanew + 20)[0]
-    if number_of_sections == 0 or number_of_sections > MAX_SECTION_COUNT:
+    if number_of_sections == 0 or number_of_sections > cs.MAX_SECTION_COUNT:
         return _result("invalid-section-count")
 
     optional_header_offset = e_lfanew + 24
@@ -244,7 +194,7 @@ def _parse_pe_executable_ranges_for_image(dump_data, translator, image_start, im
         return _result("optional-header-out-of-range")
 
     section_table_offset = required_optional_size
-    section_table_size = number_of_sections * SECTION_HEADER_SIZE
+    section_table_size = number_of_sections * cs.SECTION_HEADER_SIZE
     required_total_size = section_table_offset + section_table_size
     if required_total_size > runtime_size:
         return _result("section-table-out-of-range")
@@ -257,11 +207,11 @@ def _parse_pe_executable_ranges_for_image(dump_data, translator, image_start, im
             return _result("section-table-read-failed")
 
     optional_magic = struct.unpack_from("<H", header_bytes, optional_header_offset)[0]
-    if optional_magic == PE32_PLUS_MAGIC:
+    if optional_magic == cs.PE32_PLUS_MAGIC:
         header_image_base = struct.unpack_from(
             "<Q", header_bytes, optional_header_offset + 24
         )[0]
-    elif optional_magic == PE32_MAGIC:
+    elif optional_magic == cs.PE32_MAGIC:
         header_image_base = struct.unpack_from(
             "<I", header_bytes, optional_header_offset + 28
         )[0]
@@ -282,9 +232,9 @@ def _parse_pe_executable_ranges_for_image(dump_data, translator, image_start, im
     exec_ranges = []
     invalid_exec_sections = 0
     for section_index in range(number_of_sections):
-        section_offset = section_table_offset + (section_index * SECTION_HEADER_SIZE)
+        section_offset = section_table_offset + (section_index * cs.SECTION_HEADER_SIZE)
         characteristics = struct.unpack_from("<I", header_bytes, section_offset + 36)[0]
-        if (characteristics & IMAGE_SCN_MEM_EXECUTE) == 0:
+        if (characteristics & cs.IMAGE_SCN_MEM_EXECUTE) == 0:
             continue
 
         virtual_size = struct.unpack_from("<I", header_bytes, section_offset + 8)[0]
@@ -337,7 +287,7 @@ def _build_executable_section_map(dump_data, translator, images):
         parsed = _parse_pe_executable_ranges_for_image(
             dump_data, translator, image_start, image_end
         )
-        image_map[_image_key(image_tuple)] = parsed
+        image_map[mu.image_key(image_tuple)] = parsed
         for range_start, range_end in parsed["exec_ranges"]:
             executable_ranges.append((range_start, range_end))
 
@@ -374,7 +324,7 @@ def _build_exec_debug_dump(images, executable_map):
     }
 
     for image_tuple in images:
-        metadata = executable_map.get(_image_key(image_tuple), {})
+        metadata = executable_map.get(mu.image_key(image_tuple), {})
         status = metadata.get("status")
         if status == "ok" and metadata.get("pe_image_matches_record") is True:
             strict_match += 1
@@ -415,11 +365,11 @@ def _build_exec_debug_dump(images, executable_map):
 
 def _is_address_executable(address, images, executable_map):
     """Return whether ``address`` falls inside an executable range of its image."""
-    image_tuple = _find_image_for_address(address, images)
+    image_tuple = mu.find_image_for_address(address, images)
     if image_tuple is None:
         return None
 
-    metadata = executable_map.get(_image_key(image_tuple))
+    metadata = executable_map.get(mu.image_key(image_tuple))
     if not metadata:
         return None
 
@@ -460,14 +410,6 @@ def _resolve_memory_operand_address(instruction, mem_operand, registers):
     return (base_value + index_value + mem_operand.disp) & 0xFFFFFFFFFFFFFFFF
 
 
-def _read_qword_runtime(dump_data, translator, runtime_address):
-    """Read one runtime 64-bit value through the shared translator helper."""
-    data = mu.read_runtime_bytes(dump_data, translator, runtime_address, 8, pad=False)
-    if data is None or len(data) < 8:
-        return None
-    return struct.unpack("<Q", data)[0]
-
-
 def _resolve_control_target(instruction, registers, dump_data, translator):
     """Resolve the target of a control-transfer instruction."""
     if not instruction.operands:
@@ -486,7 +428,7 @@ def _resolve_control_target(instruction, registers, dump_data, translator):
         pointer_address = _resolve_memory_operand_address(instruction, operand.mem, registers)
         if pointer_address is None:
             return None, "memory-unresolved"
-        value = _read_qword_runtime(dump_data, translator, pointer_address)
+        value = mu.read_runtime_u64(dump_data, translator, pointer_address)
         if value is None:
             return None, f"memory-read-failed:0x{pointer_address:016X}"
         return value, f"memory:0x{pointer_address:016X}"
@@ -528,7 +470,7 @@ def _update_register_state(instruction, registers, dump_data, translator):
     elif src.type == cpt.CS_OP_MEM:
         pointer_address = _resolve_memory_operand_address(instruction, src.mem, registers)
         if pointer_address is not None:
-            resolved = _read_qword_runtime(dump_data, translator, pointer_address)
+            resolved = mu.read_runtime_u64(dump_data, translator, pointer_address)
 
     if resolved is None:
         return
@@ -594,7 +536,7 @@ def disassemble_code(
     md = cpt.Cs(cpt.CS_ARCH_X86, cpt.CS_MODE_64)
     md.detail = True
 
-    source_identity = _find_identity_for_address(start_address, images)
+    source_identity = mu.find_identity_for_address(start_address, images)
 
     for _ in range(max_hops):
         if current_address in visited_addresses:
@@ -620,7 +562,7 @@ def disassemble_code(
                 target_address, resolution_source = _resolve_control_target(
                     instruction, registers, dump_data, translator
                 )
-                target_identity = _find_identity_for_address(target_address, images)
+                target_identity = mu.find_identity_for_address(target_address, images)
                 target_is_executable = _is_address_executable(
                     target_address, images, executable_map
                 )
@@ -667,7 +609,7 @@ def scan_for_hooks(dump_data, translator, function_pointers, images, executable_
         if start_address == 0:
             continue
 
-        source_identity = _find_identity_for_address(start_address, images)
+        source_identity = mu.find_identity_for_address(start_address, images)
         source_is_executable = _is_address_executable(start_address, images, executable_map)
 
         if source_is_executable is False:
@@ -706,7 +648,7 @@ def scan_for_hooks(dump_data, translator, function_pointers, images, executable_
                     "start_address": start_address,
                     "hops": hops,
                     "transfers": suspicious_transfers,
-                    "source_identity": _find_identity_for_address(start_address, images) or "<unknown>",
+                    "source_identity": mu.find_identity_for_address(start_address, images) or "<unknown>",
                 }
             )
 
@@ -824,7 +766,7 @@ def run(args) -> None:
         executable_map, _ = _build_executable_section_map(dump_data, translator, images)
 
         if images and bool(getattr(args, "debug", False)):
-            print(_build_image_debug_dump(images))
+            print(mu.build_image_debug_dump(images))
             print(_build_exec_debug_dump(images, executable_map))
 
         hooks = []

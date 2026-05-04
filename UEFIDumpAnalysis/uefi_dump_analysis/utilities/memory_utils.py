@@ -9,13 +9,6 @@ from typing import Optional
 
 from uefi_dump_analysis.utilities import constants as cs
 
-MEDIA_DEVICE_PATH = 0x04
-MEDIA_FW_VOL_FILEPATH_DP = 0x06
-MEDIA_FILEPATH_DP = 0x04
-END_DEVICE_PATH_TYPE = 0x7F
-
-MAX_IMAGE_SIZE = 0x40000000  # 1 GiB safety bound to reduce false-positive "ldri" hits.
-
 
 @dataclass(frozen=True)
 class AddressRegion:
@@ -188,16 +181,56 @@ def read_runtime_bytes(dump_data, translator, runtime_address, size, pad=False):
     return translator.read_runtime(dump_data, runtime_address, size, pad=pad)
 
 
-def _read_runtime_u64(dump_data, translator, runtime_address):
+def read_u64_le(data, offset):
+    return struct.unpack_from("<Q", data, offset)[0]
+
+
+def read_runtime_u64(dump_data, translator, runtime_address):
     data = read_runtime_bytes(dump_data, translator, runtime_address, 8, pad=False)
     if data is None or len(data) < 8:
         return None
     return struct.unpack("<Q", data)[0]
 
 
+def find_image_for_address(address, images):
+    if address is None:
+        return None
+
+    for image in images:
+        start, end, _ = image
+        if start <= address < end:
+            return image
+    return None
+
+
+def find_identity_for_address(address, images):
+    image = find_image_for_address(address, images)
+    if image is None:
+        return None
+    return image[2]
+
+
+def image_key(image_tuple):
+    start, end, identity = image_tuple
+    return (start, end, str(identity))
+
+
+def build_image_debug_dump(images):
+    lines = []
+    lines.append("[debug] Loaded image ranges:")
+    lines.append(
+        "[debug] index | start               | end                 | identity"
+    )
+    for index, (start, end, identity) in enumerate(sorted(images, key=lambda item: item[0]), start=1):
+        lines.append(
+            f"[debug] {index:5d} | 0x{start:016X} | 0x{end:016X} | {identity}"
+        )
+    return "\n".join(lines)
+
+
 def extract_image_base_and_size(data, offset):
-    image_base_page = struct.unpack_from("<Q", data, offset + cs.IMAGE_BASE_OFFSET)[0]
-    image_size = struct.unpack_from("<Q", data, offset + cs.IMAGE_SIZE_OFFSET)[0]
+    image_base_page = read_u64_le(data, offset + cs.IMAGE_BASE_OFFSET)
+    image_size = read_u64_le(data, offset + cs.IMAGE_SIZE_OFFSET)
     return image_base_page, image_size
 
 
@@ -221,7 +254,7 @@ def _try_decode_utf16_path(raw_bytes):
     return None
 
 
-def _try_parse_guid(raw_bytes):
+def parse_guid(raw_bytes):
     if len(raw_bytes) < cs.GUID_SIZE:
         return None
 
@@ -262,17 +295,17 @@ def _extract_identity_from_device_path(dump_data, translator, pointer_address, m
         payload_length = node_length - 4
         payload = dump_data[payload_offset:payload_offset + payload_length]
 
-        if node_type == MEDIA_DEVICE_PATH:
-            if node_subtype == MEDIA_FW_VOL_FILEPATH_DP:
-                guid = _try_parse_guid(payload)
+        if node_type == cs.MEDIA_DEVICE_PATH:
+            if node_subtype == cs.MEDIA_FW_VOL_FILEPATH_DP:
+                guid = parse_guid(payload)
                 if guid and guid != "00000000-0000-0000-0000-000000000000":
                     return guid
-            elif node_subtype == MEDIA_FILEPATH_DP:
+            elif node_subtype == cs.MEDIA_FILEPATH_DP:
                 path = _try_decode_utf16_path(payload)
                 if path:
                     return path
 
-        if node_type == END_DEVICE_PATH_TYPE:
+        if node_type == cs.END_DEVICE_PATH_TYPE:
             break
 
         current_offset += node_length
@@ -290,7 +323,7 @@ def extract_guid_or_path(data, start_offset, max_bytes=512):
     return _extract_identity_from_device_path(data, translator, pointer_value, max_bytes=max_bytes)
 
 
-def _iter_signature_offsets(dump_data):
+def iter_loaded_image_signature_offsets(dump_data):
     index = 0
     while True:
         index = dump_data.find(cs.SIGNATURE, index)
@@ -305,12 +338,12 @@ def extract_images(
     memory_map_path: Optional[str] = None,
     quiet: bool = True,
     return_details: bool = False,
-    max_image_size: int = MAX_IMAGE_SIZE,
+    max_image_size: int = cs.MAX_IMAGE_SIZE,
 ):
     translator = build_address_translator(dump_data, memory_map_path)
     candidates = []
 
-    for index in _iter_signature_offsets(dump_data):
+    for index in iter_loaded_image_signature_offsets(dump_data):
         if len(dump_data) - index < cs.IMAGE_SIZE_OFFSET + 8:
             continue
 
@@ -344,7 +377,7 @@ def extract_images(
             continue
 
         identity = _extract_identity_from_device_path(dump_data, translator, file_path_pointer)
-        system_table_signature_value = _read_runtime_u64(dump_data, translator, system_table_pointer)
+        system_table_signature_value = read_runtime_u64(dump_data, translator, system_table_pointer)
         system_table_signature_valid = (
             system_table_signature_value == cs.EFI_SYSTEM_TABLE_SIGNATURE
             if system_table_signature_value is not None
