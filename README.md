@@ -79,12 +79,17 @@ work, please cite the paper below. The BibTeX entry currently cites the arXiv
 preprint; an updated venue citation will be provided when available.
 
 ```bibtex
-@article{segal2025uefi,
-  title={Uefi memory forensics: a framework for uefi threat analysis},
-  author={Segal, Kalanit Suzan and Gorelik, Hadar Cochavi and Brodt, Oleg and Elbahar, Yuval and Elovici, Yuval and Shabtai, Asaf},
-  journal={arXiv preprint arXiv:2501.16962},
-  year={2025}
-}
+@INPROCEEDINGS{11624234,
+  author={Segal, Kalanit Suzan and Cochavi Gorelik, Hadar and Brodt, Oleg and Elbahar, Yuval and Elovici, Yuval and Shabtai, Asaf},
+  booktitle={2026 IEEE 11th European Symposium on Security and Privacy (EuroS&P)}, 
+  title={UEFI Memory Forensics: A Framework for UEFI Threat Analysis}, 
+  year={2026},
+  volume={},
+  number={},
+  pages={208-224},
+  keywords={Booting;Memory;Microprogramming;Modules (abstract algebra);Forensics;Manuals;Runtime;Signal detection;Security;Loading;UEFI security;Memory forensics;Memory acquisition;Bootkits;Firmware analysis;Malware detection},
+  doi={10.1109/EuroSP68448.2026.00024}}
+
 ```
 
 Pull requests that fix bugs, improve documentation, or add focused enhancements
