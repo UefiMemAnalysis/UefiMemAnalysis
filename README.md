@@ -2,7 +2,7 @@
 
 `UefiMemAnalysis` is an open-source framework for UEFI memory acquisition and
 offline analysis of UEFI memory dumps. It accompanies the paper
-[UEFI Memory Forensics](https://arxiv.org/pdf/2501.16962), which has been
+[UEFI Memory Forensics](https://ieeexplore.ieee.org/document/11624234/), which has been
 accepted to the 11th IEEE European Symposium on Security and Privacy
 (Euro S&P).
 
