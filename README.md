@@ -75,8 +75,7 @@ support SLA.
 ## Citation and Contributions
 
 If you use this project or the accompanying framework in academic or research
-work, please cite the paper below. The BibTeX entry currently cites the arXiv
-preprint; an updated venue citation will be provided when available.
+work, please cite the paper below.
 
 ```bibtex
 @INPROCEEDINGS{11624234,
